@@ -7,6 +7,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <algorithm> 
 
 #define _GLIBCXX_USE_CXX20_ABI 1
 #define MAX_CMD_SIZE 1024
@@ -42,87 +43,85 @@ void regestration_signal(){
     sigaction(SIGSEGV, &sa, nullptr); // Segmentation fault
 
 }
-
 //вынос обработки клиента 
 void handle_client(int client_fd, Database& db) {
-
     char buffer[MAX_CMD_SIZE];
-    ssize_t bytes = read(client_fd, buffer, sizeof(buffer) - 1);
-    if (bytes <= 0) {
-        CLOSE_CLIENT;
-        return;
-    }
-    buffer[bytes] = '\0';
-    std::string cmd(buffer);
-
-    //парсим команду SET
-    std::string cmd(buffer);
-    if (cmd.rfind("SET ", 0) == 0){
-        auto pos = cmd.find(' ', 4);
-        if (pos == std::string::npos) { 
-            write(client_fd, ERROR, 5); 
-            CLOSE_CLIENT; 
-        }
-        db.set(cmd.substr(4, pos - 4), cmd.substr(pos + 1));
-        write(client_fd,OK,OK_Len);
-        CLOSE_CLIENT;
-    }
     
-    //Парсим команду GET
-    if (cmd.rfind("GET ", 0) == 0){
-        auto pos=cmd.find(' ',4);
-        if (pos == std::string::npos) { 
-            write(client_fd, ERROR, 5); 
-            CLOSE_CLIENT; 
+    while (true) {
+        ssize_t bytes = read(client_fd, buffer, sizeof(buffer) - 1);
+        if (bytes <= 0) {
+            CLOSE_CLIENT;
+            return;
         }
-        string key = cmd.substr(4, pos - 4);
-        string value = db.get(key);
-        write(client_fd, value.c_str(), value.size()); 
-        CLOSE_CLIENT;
-    }
+        buffer[bytes] = '\0';
+        std::string cmd(buffer);
 
-    //Парсим команду DEL
-    if (cmd.rfind("DEL ", 0) == 0){
-        auto pos=cmd.find(' ',4);
-        if (pos == std::string::npos) { 
-            write(client_fd, ERROR, 5); 
-            CLOSE_CLIENT; 
-        }
-        string key = cmd.substr(4, pos - 4);
-        bool delit = db.del(key);
-        if(delit){
-            write(client_fd, OK, OK_Len); 
-            CLOSE_CLIENT;
-        }
-        else{
-            write(client_fd,NOTFOUND, NOTFOUND_Len); 
-            CLOSE_CLIENT;
-        }
+        cmd.erase(std::remove(cmd.begin(), cmd.end(), '\r'), cmd.end());
+        cmd.erase(std::remove(cmd.begin(), cmd.end(), '\n'), cmd.end());
 
-    }
-
-    //Парсим команду EXIST
-    if (cmd.rfind("EXIST ", 0) == 0){
-        auto pos=cmd.find(' ',6);
-        if (pos == std::string::npos) { 
-            write(client_fd, ERROR, ERROR_LEN); 
-            CLOSE_CLIENT; 
+        //парсим команду SET
+        if (cmd.rfind("SET ", 0) == 0) {
+            size_t space_pos = cmd.find(' ', 4);
+            if (space_pos == string::npos) {
+                write(client_fd, ERROR, ERROR_LEN);
+                continue;
+            }
+            string key = cmd.substr(4, space_pos - 4);
+            string value = cmd.substr(space_pos + 1);
+            db.set(key, value);
+            write(client_fd, OK, OK_Len);
+            continue;
         }
-        string key = cmd.substr(6, pos - 6);
-        bool exists = db.exists(key);
-        if(exists){
-            write(client_fd, FOUND, FOUND_Len); 
-            CLOSE_CLIENT;
-        }
-        else{
-            write(client_fd,NOTFOUND, NOTFOUND_Len); 
-            CLOSE_CLIENT;
+        
+        //Парсим команду GET
+        if (cmd.rfind("GET ", 0) == 0) {
+            string key = cmd.substr(4);
+            key.erase(std::remove_if(key.begin(), key.end(), ::isspace), key.end());
+            
+            string value = db.get(key);
+            write(client_fd, value.c_str(), value.size());
+            continue;
         }
 
-    CLOSE_CLIENT;
+        //Парсим команду DEL
+        if (cmd.rfind("DEL ", 0) == 0){
+            auto pos=cmd.find(' ',4);
+            if (pos == std::string::npos) { 
+                write(client_fd, ERROR, ERROR_LEN); 
+                continue;
+            }
+            string key = cmd.substr(4, pos - 4);
+            bool delit = db.del(key);
+            if(delit){
+                write(client_fd, OK, OK_Len);
+            }
+            else{
+                write(client_fd, NOTFOUND, NOTFOUND_Len);
+            }
+            continue;
+        }
+
+        //Парсим команду EXIST
+        if (cmd.rfind("EXIST ", 0) == 0){
+            auto pos=cmd.find(' ',6);
+            if (pos == std::string::npos) { 
+                write(client_fd, ERROR, ERROR_LEN); 
+                continue;
+            }
+            string key = cmd.substr(6, pos - 6);
+            bool exists = db.exists(key);
+            if(exists){
+                write(client_fd, FOUND, FOUND_Len);
+            }
+            else{
+                write(client_fd, NOTFOUND, NOTFOUND_Len);
+            }
+            continue;
+        }
+
+        write(client_fd, ERROR, ERROR_LEN);
     }
 }
-
 //основная функция
 int main(){
 
@@ -143,6 +142,7 @@ int main(){
     for (auto& t : workers) {
         if (t.joinable()) t.join();  // Ждём завершения всех потоков
     }
+    close(server_fd);
     return 0;
 }
 
