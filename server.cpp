@@ -8,18 +8,20 @@
 #include <thread>
 #include <vector>
 #include <algorithm> 
+#include <sstream> 
 
+#define RESPONSE_END "\r\n"
 #define _GLIBCXX_USE_CXX20_ABI 1
 #define MAX_CMD_SIZE 1024
 #define OK "OK"
-#define OK_Len 2
 #define NOTFOUND "NOT FOUND"
-#define NOTFOUND_Len 9
 #define FOUND "FOUND"
-#define FOUND_Len 5
 #define ERROR "ERROR"
-#define ERROR_LEN 5
 #define CLOSE_CLIENT close(client_fd)
+#define OK_LEN 2
+#define NOTFOUND_LEN 9
+#define FOUND_LEN 5
+#define ERROR_LEN 5
 
 using std::string;
 
@@ -59,67 +61,44 @@ void handle_client(int client_fd, Database& db) {
         cmd.erase(std::remove(cmd.begin(), cmd.end(), '\r'), cmd.end());
         cmd.erase(std::remove(cmd.begin(), cmd.end(), '\n'), cmd.end());
 
-        //парсим команду SET
-        if (cmd.rfind("SET ", 0) == 0) {
-            size_t space_pos = cmd.find(' ', 4);
-            if (space_pos == string::npos) {
-                write(client_fd, ERROR, ERROR_LEN);
-                continue;
-            }
-            string key = cmd.substr(4, space_pos - 4);
-            string value = cmd.substr(space_pos + 1);
-            db.set(key, value);
-            write(client_fd, OK, OK_Len);
-            continue;
+        std::vector<std::string> tokens;
+        std::istringstream iss(cmd);
+        std::string token;
+        while (iss >> token) {
+            tokens.push_back(token);
         }
-        
-        //Парсим команду GET
-        if (cmd.rfind("GET ", 0) == 0) {
-            string key = cmd.substr(4);
-            key.erase(std::remove_if(key.begin(), key.end(), ::isspace), key.end());
-            
-            string value = db.get(key);
-            write(client_fd, value.c_str(), value.size());
+
+        if (tokens.empty()) {
+            std::string response = "ERROR: empty command" + std::string(RESPONSE_END);
+            write(client_fd, response.c_str(), response.size());
             continue;
         }
 
-        //Парсим команду DEL
-        if (cmd.rfind("DEL ", 0) == 0){
-            auto pos=cmd.find(' ',4);
-            if (pos == std::string::npos) { 
-                write(client_fd, ERROR, ERROR_LEN); 
-                continue;
-            }
-            string key = cmd.substr(4, pos - 4);
-            bool delit = db.del(key);
-            if(delit){
-                write(client_fd, OK, OK_Len);
-            }
-            else{
-                write(client_fd, NOTFOUND, NOTFOUND_Len);
-            }
-            continue;
-        }
+        const std::string& command = tokens[0];
 
-        //Парсим команду EXIST
-        if (cmd.rfind("EXIST ", 0) == 0){
-            auto pos=cmd.find(' ',6);
-            if (pos == std::string::npos) { 
-                write(client_fd, ERROR, ERROR_LEN); 
-                continue;
-            }
-            string key = cmd.substr(6, pos - 6);
-            bool exists = db.exists(key);
-            if(exists){
-                write(client_fd, FOUND, FOUND_Len);
-            }
-            else{
-                write(client_fd, NOTFOUND, NOTFOUND_Len);
-            }
-            continue;
+        if (command == "SET" && tokens.size() >= 3) {
+            db.set(tokens[1], tokens[2]);
+            std::string response = std::string(OK) + RESPONSE_END;
+            write(client_fd, response.c_str(), response.size());
         }
-
-        write(client_fd, ERROR, ERROR_LEN);
+        else if (command == "GET" && tokens.size() >= 2) {
+            std::string response = db.get(tokens[1]) + RESPONSE_END;
+            write(client_fd, response.c_str(), response.size());
+        }
+        else if (command == "DEL" && tokens.size() >= 2) {
+            bool deleted = db.del(tokens[1]);
+            std::string response = std::string(deleted ? OK : NOTFOUND) + RESPONSE_END;
+            write(client_fd, response.c_str(), response.size());
+        }
+        else if (command == "EXIST" && tokens.size() >= 2) {
+            bool exists = db.exists(tokens[1]);
+            std::string response = std::string(exists ? FOUND : NOTFOUND) + RESPONSE_END;
+            write(client_fd, response.c_str(), response.size());
+        }
+        else {
+            std::string response = "ERROR: invalid command" + std::string(RESPONSE_END);
+            write(client_fd, response.c_str(), static_cast<size_t>(response.size()));
+        }
     }
 }
 //основная функция
